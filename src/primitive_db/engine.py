@@ -1,26 +1,104 @@
+import re
 import shlex
 
 import prompt
+from prettytable import PrettyTable
 
-from primitive_db.core import create_table, drop_table
-from primitive_db.utils import load_metadata, save_metadata
-
+from primitive_db.core import (
+    create_table,
+    delete,
+    drop_table,
+    insert,
+    select,
+    update,
+)
+from primitive_db.parser import parse_condition, parse_values
+from primitive_db.utils import (
+    load_metadata,
+    load_table_data,
+    save_metadata,
+    save_table_data,
+)
 
 METADATA_FILE = "db_meta.json"
 
+PYTHON_TYPES = {
+    "int": int,
+    "str": str,
+    "bool": bool,
+}
+
 
 def print_help():
-    print("\n***Процесс работы с таблицей***")
-    print("Функции:")
-    print(
-        "<command> create_table <имя_таблицы> "
-        "<столбец1:тип> <столбец2:тип> .. - создать таблицу"
-    )
-    print("<command> list_tables - показать список всех таблиц")
-    print("<command> drop_table <имя_таблицы> - удалить таблицу")
-    print("<command> exit - выход из программы")
-    print("<command> help - справочная информация")
+    print("\n***Операции с данными***")
+    print("\nФункции:")
+
+    commands = [
+        "create_table <имя> <столбец:тип> ... - создать таблицу",
+        "list_tables - показать список таблиц",
+        "drop_table <имя> - удалить таблицу",
+        "insert into <имя_таблицы> values (<значение1>, <значение2>, ...) - создать запись.", # noqa: E501
+        "select from <имя_таблицы> where <столбец> = <значение> - прочитать записи по условию.", # noqa: E501
+        "select from <имя_таблицы> - прочитать все записи.",
+        "update <имя_таблицы> set <столбец1> = <новое_значение1> where <столбец_условия> = <значение_условия> - обновить запись.", # noqa: E501
+        "delete from <имя_таблицы> where <столбец> = <значение> - удалить запись.",
+        "info <имя_таблицы> - вывести информацию о таблице.",
+        "exit - выход из программы",
+        "help - справочная информация",
+    ]
+
+    for command in commands:
+        print(f"<command> {command}")
+
     print()
+
+
+def check_table(metadata, table_name):
+    if table_name not in metadata:
+        raise ValueError(
+            f'Ошибка: Таблица "{table_name}" не существует.'
+        )
+
+
+def get_schema(metadata, table_name):
+    check_table(metadata, table_name)
+
+    return dict(
+        column.split(":") for column in metadata[table_name]
+    )
+
+
+def validate_condition(metadata, table_name, condition):
+    schema = get_schema(metadata, table_name)
+
+    for column, value in condition.items():
+        if column not in schema:
+            raise ValueError(
+                f'Ошибка: Столбец "{column}" не существует.'
+            )
+
+        expected_type = PYTHON_TYPES[schema[column]]
+
+        if type(value) is not expected_type:
+            raise ValueError(
+                f"Некорректное значение: {value!r}. "
+                f"Для столбца {column} требуется {schema[column]}."
+            )
+
+
+def print_table(metadata, table_name, rows):
+    columns = [
+        column.split(":")[0]
+        for column in metadata[table_name]
+    ]
+
+    table = PrettyTable()
+    table.field_names = columns
+
+    for row in rows:
+        table.add_row([row[column] for column in columns])
+
+    print(table)
 
 
 def run():
@@ -30,80 +108,230 @@ def run():
         metadata = load_metadata(METADATA_FILE)
 
         try:
-            user_input = prompt.string(">>>Введите команду: ")
-            args = shlex.split(user_input)
-        except ValueError:
-            print("Ошибка: Некорректный формат команды.")
-            continue
+            user_input = prompt.string(">>>Введите команду: ").strip()
+
+            if not user_input:
+                continue
+
+            command = user_input.split()[0].lower()
+
+            if command == "exit":
+                if user_input.lower() != "exit":
+                    raise ValueError(
+                        "Ошибка: Команда exit не принимает аргументы."
+                    )
+                print("Выход из программы.")
+                break
+
+            elif command == "help":
+                if user_input.lower() != "help":
+                    raise ValueError(
+                        "Ошибка: Команда help не принимает аргументы."
+                    )
+                print_help()
+
+            elif command == "create_table":
+                args = shlex.split(user_input)
+
+                if len(args) < 3:
+                    raise ValueError(
+                        "Ошибка: Укажите имя таблицы "
+                        "и хотя бы один столбец."
+                    )
+
+                table_name = args[1]
+                columns = args[2:]
+
+                old_metadata = metadata.copy()
+
+                metadata = create_table(
+                    metadata, table_name, columns
+                )
+
+                if metadata != old_metadata:
+                    save_metadata(METADATA_FILE, metadata)
+
+            elif command == "list_tables":
+                if user_input.lower() != "list_tables":
+                    raise ValueError(
+                        "Ошибка: list_tables не принимает аргументы."
+                    )
+
+                if not metadata:
+                    print("Таблиц пока нет.")
+                else:
+                    for table_name in metadata:
+                        print(f"- {table_name}")
+
+            elif command == "drop_table":
+                args = shlex.split(user_input)
+
+                if len(args) != 2:
+                    raise ValueError(
+                        "Ошибка: Укажите одно имя таблицы."
+                    )
+
+                old_metadata = metadata.copy()
+
+                metadata = drop_table(metadata, args[1])
+
+                if metadata != old_metadata:
+                    save_metadata(METADATA_FILE, metadata)
+
+            elif command == "insert":
+                match = re.fullmatch(
+                    r"insert\s+into\s+(\w+)\s+"
+                    r"values\s*\((.*)\)\s*",
+                    user_input,
+                    re.IGNORECASE,
+                )
+
+                if not match:
+                    raise ValueError("Ошибка: Некорректный INSERT.")
+
+                table_name = match.group(1)
+                values = parse_values(match.group(2))
+
+                # insert() проверяет схему и загружает данные.
+                table_data = insert(metadata, table_name, values)
+
+                save_table_data(table_name, table_data)
+
+            elif command == "select":
+                match = re.fullmatch(
+                    r"select\s+from\s+(\w+)"
+                    r"(?:\s+where\s+(.+))?\s*",
+                    user_input,
+                    re.IGNORECASE,
+                )
+
+                if not match:
+                    raise ValueError("Ошибка: Некорректный SELECT.")
+
+                table_name = match.group(1)
+                check_table(metadata, table_name)
+
+                table_data = load_table_data(table_name)
+
+                if match.group(2):
+                    where_clause = parse_condition(match.group(2))
+
+                    validate_condition(
+                        metadata, table_name, where_clause
+                    )
+
+                    result = select(table_data, where_clause)
+                else:
+                    result = select(table_data)
+
+                print_table(metadata, table_name, result)
+
+            elif command == "update":
+                match = re.fullmatch(
+                    r"update\s+(\w+)\s+set\s+(.+?)"
+                    r"\s+where\s+(.+)",
+                    user_input,
+                    re.IGNORECASE,
+                )
+
+                if not match:
+                    raise ValueError("Ошибка: Некорректный UPDATE.")
+
+                table_name = match.group(1)
+                set_clause = parse_condition(match.group(2))
+                where_clause = parse_condition(match.group(3))
+
+                validate_condition(
+                    metadata, table_name, set_clause
+                )
+                validate_condition(
+                    metadata, table_name, where_clause
+                )
+
+                if "ID" in set_clause:
+                    raise ValueError(
+                        "Ошибка: Нельзя изменять первичный ключ ID."
+                    )
+
+                table_data = load_table_data(table_name)
+
+                new_data, updated_ids = update(
+                    table_data, set_clause, where_clause
+                )
+
+                if updated_ids:
+                    save_table_data(table_name, new_data)
+
+                    for record_id in updated_ids:
+                        print(
+                            f'Запись с ID={record_id} в таблице '
+                            f'"{table_name}" успешно обновлена.'
+                        )
+                else:
+                    print("Записи по условию не найдены.")
+
+            elif command == "delete":
+                match = re.fullmatch(
+                    r"delete\s+from\s+(\w+)"
+                    r"\s+where\s+(.+)",
+                    user_input,
+                    re.IGNORECASE,
+                )
+
+                if not match:
+                    raise ValueError("Ошибка: Некорректный DELETE.")
+
+                table_name = match.group(1)
+                where_clause = parse_condition(match.group(2))
+
+                validate_condition(
+                    metadata, table_name, where_clause
+                )
+
+                table_data = load_table_data(table_name)
+
+                new_data, deleted_ids = delete(
+                    table_data, where_clause
+                )
+
+                if deleted_ids:
+                    save_table_data(table_name, new_data)
+
+                    for record_id in deleted_ids:
+                        print(
+                            f"Запись с ID={record_id} успешно "
+                            f'удалена из таблицы "{table_name}".'
+                        )
+                else:
+                    print("Записи по условию не найдены.")
+
+            elif command == "info":
+                args = shlex.split(user_input)
+
+                if len(args) != 2:
+                    raise ValueError(
+                        "Ошибка: Укажите одно имя таблицы."
+                    )
+
+                table_name = args[1]
+                check_table(metadata, table_name)
+
+                table_data = load_table_data(table_name)
+
+                print(f"Таблица: {table_name}")
+                print(
+                    f"Столбцы: {', '.join(metadata[table_name])}"
+                )
+                print(f"Количество записей: {len(table_data)}")
+
+            else:
+                print(
+                    f"Функции {command} нет. Попробуйте снова."
+                )
+
+        except ValueError as error:
+            print(error)
+
         except (KeyboardInterrupt, EOFError):
             print("\nВыход из программы.")
             break
-
-        if not args:
-            continue
-
-        command = args[0]
-        arguments = args[1:]
-
-        if command == "exit":
-            if arguments:
-                print(f"Некорректное значение: {arguments[0]}. Попробуйте снова.")
-                continue
-            break
-
-        elif command == "help":
-            if arguments:
-                print(f"Некорректное значение: {arguments[0]}. Попробуйте снова.")
-                continue
-            print_help()
-
-        elif command == "list_tables":
-            if arguments:
-                print(f"Некорректное значение: {arguments[0]}. Попробуйте снова.")
-                continue
-
-            if not metadata:
-                print("Таблиц пока нет.")
-            else:
-                for table_name in metadata:
-                    print(f"- {table_name}")
-
-        elif command == "create_table":
-            if len(arguments) < 2:
-                print(
-                    "Ошибка: Укажите имя таблицы "
-                    "и хотя бы один столбец."
-                )
-                continue
-
-            table_name = arguments[0]
-            columns = arguments[1:]
-
-            old_metadata = metadata.copy()
-
-            metadata = create_table(
-                metadata, table_name, columns
-            )
-
-            if metadata != old_metadata:
-                save_metadata(METADATA_FILE, metadata)
-
-        elif command == "drop_table":
-            if len(arguments) != 1:
-                print(
-                    "Ошибка: Команда drop_table "
-                    "принимает одно имя таблицы."
-                )
-                continue
-
-            table_name = arguments[0]
-
-            old_metadata = metadata.copy()
-
-            metadata = drop_table(metadata, table_name)
-
-            if metadata != old_metadata:
-                save_metadata(METADATA_FILE, metadata)
-
-        else:
-            print(f"Функции {command} нет. Попробуйте снова.")
