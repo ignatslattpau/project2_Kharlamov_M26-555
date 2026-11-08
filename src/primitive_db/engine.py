@@ -14,6 +14,7 @@ from primitive_db.core import (
 )
 from primitive_db.parser import parse_condition, parse_values
 from primitive_db.utils import (
+    delete_table_data,
     load_metadata,
     load_table_data,
     save_metadata,
@@ -130,7 +131,10 @@ def run():
                     )
                 print_help()
 
+
+
             elif command == "create_table":
+
                 args = shlex.split(user_input)
 
                 if len(args) < 3:
@@ -142,14 +146,10 @@ def run():
                 table_name = args[1]
                 columns = args[2:]
 
-                old_metadata = metadata.copy()
+                result = create_table(metadata, table_name, columns)
 
-                metadata = create_table(
-                    metadata, table_name, columns
-                )
-
-                if metadata != old_metadata:
-                    save_metadata(METADATA_FILE, metadata)
+                if result is not None:
+                    save_metadata(METADATA_FILE, result)
 
             elif command == "list_tables":
                 if user_input.lower() != "list_tables":
@@ -171,12 +171,13 @@ def run():
                         "Ошибка: Укажите одно имя таблицы."
                     )
 
-                old_metadata = metadata.copy()
+                table_name = args[1]
 
-                metadata = drop_table(metadata, args[1])
+                result = drop_table(metadata, table_name)
 
-                if metadata != old_metadata:
-                    save_metadata(METADATA_FILE, metadata)
+                if result is not None:
+                    save_metadata(METADATA_FILE, result)
+                    delete_table_data(table_name)
 
             elif command == "insert":
                 match = re.fullmatch(
@@ -191,11 +192,11 @@ def run():
 
                 table_name = match.group(1)
                 values = parse_values(match.group(2))
+                result = insert(metadata, table_name, values)
 
-                # insert() проверяет схему и загружает данные.
-                table_data = insert(metadata, table_name, values)
+                if result is not None:
+                    save_table_data(table_name, result)
 
-                save_table_data(table_name, table_data)
 
             elif command == "select":
                 match = re.fullmatch(
@@ -210,21 +211,20 @@ def run():
 
                 table_name = match.group(1)
                 check_table(metadata, table_name)
-
                 table_data = load_table_data(table_name)
 
                 if match.group(2):
                     where_clause = parse_condition(match.group(2))
-
                     validate_condition(
                         metadata, table_name, where_clause
                     )
-
                     result = select(table_data, where_clause)
+
                 else:
                     result = select(table_data)
+                if result is not None:
+                    print_table(metadata, table_name, result)
 
-                print_table(metadata, table_name, result)
 
             elif command == "update":
                 match = re.fullmatch(
@@ -240,13 +240,8 @@ def run():
                 table_name = match.group(1)
                 set_clause = parse_condition(match.group(2))
                 where_clause = parse_condition(match.group(3))
-
-                validate_condition(
-                    metadata, table_name, set_clause
-                )
-                validate_condition(
-                    metadata, table_name, where_clause
-                )
+                validate_condition(metadata, table_name, set_clause)
+                validate_condition(metadata, table_name, where_clause)
 
                 if "ID" in set_clause:
                     raise ValueError(
@@ -254,21 +249,20 @@ def run():
                     )
 
                 table_data = load_table_data(table_name)
+                result = update(table_data, set_clause, where_clause)
+                if result is not None:
+                    new_data, updated_ids = result
+                    if updated_ids:
+                        save_table_data(table_name, new_data)
+                        for record_id in updated_ids:
+                            print(
+                                f'Запись с ID={record_id} в таблице '
+                                f'"{table_name}" успешно обновлена.'
+                            )
 
-                new_data, updated_ids = update(
-                    table_data, set_clause, where_clause
-                )
+                    else:
+                        print("Записи по условию не найдены.")
 
-                if updated_ids:
-                    save_table_data(table_name, new_data)
-
-                    for record_id in updated_ids:
-                        print(
-                            f'Запись с ID={record_id} в таблице '
-                            f'"{table_name}" успешно обновлена.'
-                        )
-                else:
-                    print("Записи по условию не найдены.")
 
             elif command == "delete":
                 match = re.fullmatch(
@@ -283,27 +277,23 @@ def run():
 
                 table_name = match.group(1)
                 where_clause = parse_condition(match.group(2))
-
-                validate_condition(
-                    metadata, table_name, where_clause
-                )
-
+                validate_condition(metadata, table_name, where_clause)
                 table_data = load_table_data(table_name)
+                result = delete(table_data, where_clause)
 
-                new_data, deleted_ids = delete(
-                    table_data, where_clause
-                )
+                if result is not None:
+                    new_data, deleted_ids = result
+                    if deleted_ids:
+                        save_table_data(table_name, new_data)
 
-                if deleted_ids:
-                    save_table_data(table_name, new_data)
+                        for record_id in deleted_ids:
+                            print(
+                                f"Запись с ID={record_id} успешно "
+                                f'удалена из таблицы "{table_name}".'
+                            )
+                    else:
+                        print("Записи по условию не найдены.")
 
-                    for record_id in deleted_ids:
-                        print(
-                            f"Запись с ID={record_id} успешно "
-                            f'удалена из таблицы "{table_name}".'
-                        )
-                else:
-                    print("Записи по условию не найдены.")
 
             elif command == "info":
                 args = shlex.split(user_input)

@@ -1,20 +1,35 @@
-from primitive_db.utils import delete_table_data, load_table_data
+import json
+from copy import deepcopy
+
+from primitive_db.decorators import (
+    confirm_action,
+    create_cacher,
+    handle_db_errors,
+    log_time,
+)
+from primitive_db.utils import load_table_data
 
 ALLOWED_TYPES = {"int", "str", "bool"}
 
+PYTHON_TYPES = {
+    "int": int,
+    "str": str,
+    "bool": bool,
+}
 
+cache_result = create_cacher()
+
+
+@handle_db_errors
 def create_table(metadata, table_name, columns):
     if not table_name.isidentifier():
-        print(f"Некорректное значение: {table_name}. Попробуйте снова.")
-        return metadata
+        raise ValueError(f"Некорректное имя таблицы: {table_name}")
 
     if table_name in metadata:
-        print(f'Ошибка: Таблица "{table_name}" уже существует.')
-        return metadata
+        raise ValueError(f'Таблица "{table_name}" уже существует.')
 
     if not columns:
-        print("Ошибка: Укажите хотя бы один столбец.")
-        return metadata
+        raise ValueError("Укажите хотя бы один столбец.")
 
     new_columns = []
     column_names = set()
@@ -23,22 +38,18 @@ def create_table(metadata, table_name, columns):
         parts = column.split(":")
 
         if len(parts) != 2:
-            print(f"Некорректное значение: {column}. Попробуйте снова.")
-            return metadata
+            raise ValueError(f"Некорректное значение: {column}")
 
         name, data_type = parts
 
         if not name.isidentifier() or data_type not in ALLOWED_TYPES:
-            print(f"Некорректное значение: {column}. Попробуйте снова.")
-            return metadata
+            raise ValueError(f"Некорректное значение: {column}")
 
         if name in column_names:
-            print(f"Ошибка: Столбец {name} указан несколько раз.")
-            return metadata
+            raise ValueError(f"Столбец {name} указан несколько раз.")
 
         if name == "ID" and data_type != "int":
-            print("Некорректное значение: ID должен иметь тип int.")
-            return metadata
+            raise ValueError("ID должен иметь тип int.")
 
         column_names.add(name)
         new_columns.append(column)
@@ -49,35 +60,43 @@ def create_table(metadata, table_name, columns):
         new_columns.remove("ID:int")
         new_columns.insert(0, "ID:int")
 
-    metadata[table_name] = new_columns
+    new_metadata = metadata.copy()
+    new_metadata[table_name] = new_columns
 
     print(
         f'Таблица "{table_name}" успешно создана '
         f'со столбцами: {", ".join(new_columns)}'
     )
 
-    return metadata
+    return new_metadata
 
 
+@handle_db_errors
+@confirm_action("удаление таблицы")
 def drop_table(metadata, table_name):
     if table_name not in metadata:
-        print(f'Ошибка: Таблица "{table_name}" не существует.')
-        return metadata
+        raise ValueError(f'Таблица "{table_name}" не существует.')
 
-    del metadata[table_name]
-    delete_table_data(table_name)
+    new_metadata = metadata.copy()
+    del new_metadata[table_name]
 
     print(f'Таблица "{table_name}" успешно удалена.')
 
-    return metadata
+    return new_metadata
 
 
+@handle_db_errors
+@log_time
 def insert(metadata, table_name, values):
     if table_name not in metadata:
         raise ValueError(f'Таблица "{table_name}" не существует.')
 
     columns = metadata[table_name]
-    user_columns = [col for col in columns if col.split(":")[0] != "ID"]
+
+    user_columns = [
+        col for col in columns
+        if col.split(":")[0] != "ID"
+    ]
 
     if len(values) != len(user_columns):
         raise ValueError(
@@ -90,15 +109,8 @@ def insert(metadata, table_name, values):
     for column, value in zip(user_columns, values):
         name, data_type = column.split(":")
 
-        expected_types = {
-            "int": int,
-            "str": str,
-            "bool": bool,
-        }
+        expected_type = PYTHON_TYPES[data_type]
 
-        expected_type = expected_types[data_type]
-
-        # Используем type(), потому что bool является подклассом int.
         if type(value) is not expected_type:
             raise ValueError(
                 f"Некорректное значение: {value!r}. "
@@ -109,7 +121,10 @@ def insert(metadata, table_name, values):
 
     table_data = load_table_data(table_name)
 
-    new_id = max((row["ID"] for row in table_data), default=0) + 1
+    new_id = max(
+        (row["ID"] for row in table_data),
+        default=0,
+    ) + 1
 
     record = {"ID": new_id, **record}
     table_data.append(record)
@@ -122,16 +137,34 @@ def insert(metadata, table_name, values):
     return table_data
 
 
+@handle_db_errors
+@log_time
 def select(table_data, where_clause=None):
-    if where_clause is None:
-        return table_data
+    key = json.dumps(
+        [table_data, where_clause],
+        ensure_ascii=False,
+        sort_keys=True,
+    )
 
-    return [
-        row for row in table_data
-        if all(row.get(key) == value for key, value in where_clause.items())
-    ]
+    def get_result():
+        if where_clause is None:
+            return deepcopy(table_data)
+
+        return [
+            row.copy()
+            for row in table_data
+            if all(
+                row.get(column) == value
+                for column, value in where_clause.items()
+            )
+        ]
+
+    result = cache_result(key, get_result)
+
+    return deepcopy(result)
 
 
+@handle_db_errors
 def update(table_data, set_clause, where_clause):
     updated_data = []
     updated_ids = []
@@ -140,8 +173,8 @@ def update(table_data, set_clause, where_clause):
         new_row = row.copy()
 
         if all(
-            row.get(key) == value
-            for key, value in where_clause.items()
+            row.get(column) == value
+            for column, value in where_clause.items()
         ):
             new_row.update(set_clause)
             updated_ids.append(row["ID"])
@@ -151,14 +184,16 @@ def update(table_data, set_clause, where_clause):
     return updated_data, updated_ids
 
 
+@handle_db_errors
+@confirm_action("удаление записи")
 def delete(table_data, where_clause):
     deleted_ids = []
     remaining_data = []
 
     for row in table_data:
         if all(
-            row.get(key) == value
-            for key, value in where_clause.items()
+            row.get(column) == value
+            for column, value in where_clause.items()
         ):
             deleted_ids.append(row["ID"])
         else:
