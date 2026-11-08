@@ -1,6 +1,7 @@
 import json
 from copy import deepcopy
 
+from primitive_db.constants import PYTHON_TYPES, VALID_TYPES
 from primitive_db.decorators import (
     confirm_action,
     create_cacher,
@@ -8,8 +9,6 @@ from primitive_db.decorators import (
     log_time,
 )
 from primitive_db.utils import load_table_data
-
-from primitive_db.constants import PYTHON_TYPES, VALID_TYPES
 
 cache_result = create_cacher()
 
