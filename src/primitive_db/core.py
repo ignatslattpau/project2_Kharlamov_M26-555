@@ -9,19 +9,14 @@ from primitive_db.decorators import (
 )
 from primitive_db.utils import load_table_data
 
-ALLOWED_TYPES = {"int", "str", "bool"}
-
-PYTHON_TYPES = {
-    "int": int,
-    "str": str,
-    "bool": bool,
-}
+from primitive_db.constants import PYTHON_TYPES, VALID_TYPES
 
 cache_result = create_cacher()
 
 
 @handle_db_errors
 def create_table(metadata, table_name, columns):
+    """Создаёт таблицу и сохраняет её структуру в метаданных."""
     if not table_name.isidentifier():
         raise ValueError(f"Некорректное имя таблицы: {table_name}")
 
@@ -42,7 +37,7 @@ def create_table(metadata, table_name, columns):
 
         name, data_type = parts
 
-        if not name.isidentifier() or data_type not in ALLOWED_TYPES:
+        if not name.isidentifier() or data_type not in VALID_TYPES:
             raise ValueError(f"Некорректное значение: {column}")
 
         if name in column_names:
@@ -74,6 +69,7 @@ def create_table(metadata, table_name, columns):
 @handle_db_errors
 @confirm_action("удаление таблицы")
 def drop_table(metadata, table_name):
+    """Удаляет таблицу из метаданных."""
     if table_name not in metadata:
         raise ValueError(f'Таблица "{table_name}" не существует.')
 
@@ -88,6 +84,7 @@ def drop_table(metadata, table_name):
 @handle_db_errors
 @log_time
 def insert(metadata, table_name, values):
+    """Добавляет запись в таблицу с автоматически созданным ID."""
     if table_name not in metadata:
         raise ValueError(f'Таблица "{table_name}" не существует.')
 
@@ -140,6 +137,7 @@ def insert(metadata, table_name, values):
 @handle_db_errors
 @log_time
 def select(table_data, where_clause=None):
+    """Возвращает записи таблицы с учётом условия поиска."""
     key = json.dumps(
         [table_data, where_clause],
         ensure_ascii=False,
@@ -147,6 +145,7 @@ def select(table_data, where_clause=None):
     )
 
     def get_result():
+        """Формирует результат выборки для сохранения в кэше."""
         if where_clause is None:
             return deepcopy(table_data)
 
@@ -166,6 +165,7 @@ def select(table_data, where_clause=None):
 
 @handle_db_errors
 def update(table_data, set_clause, where_clause):
+    """Обновляет записи таблицы, соответствующие условию."""
     updated_data = []
     updated_ids = []
 
@@ -187,6 +187,7 @@ def update(table_data, set_clause, where_clause):
 @handle_db_errors
 @confirm_action("удаление записи")
 def delete(table_data, where_clause):
+    """Удаляет записи таблицы, соответствующие условию."""
     deleted_ids = []
     remaining_data = []
 
