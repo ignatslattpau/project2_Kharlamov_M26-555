@@ -2,6 +2,7 @@ import re
 
 
 def parse_value(value):
+    """Преобразует строку в значение типа int, str или bool."""
     value = value.strip()
 
     if (
@@ -26,6 +27,7 @@ def parse_value(value):
 
 
 def parse_values(text):
+    """Разбирает список значений, разделённых запятыми."""
     parts = []
     current = []
     quote = None
@@ -63,6 +65,7 @@ def parse_values(text):
 
 
 def parse_condition(text):
+    """Преобразует условие сравнения в словарь."""
     match = re.fullmatch(r"\s*(\w+)\s*=\s*(.+?)\s*", text)
 
     if match is None:

@@ -21,16 +21,11 @@ from primitive_db.utils import (
     save_table_data,
 )
 
-METADATA_FILE = "db_meta.json"
-
-PYTHON_TYPES = {
-    "int": int,
-    "str": str,
-    "bool": bool,
-}
+from primitive_db.constants import META_FILE, PYTHON_TYPES
 
 
 def print_help():
+    """Выводит справочную информацию о командах базы данных."""
     print("\n***Операции с данными***")
     print("\nФункции:")
 
@@ -55,6 +50,7 @@ def print_help():
 
 
 def check_table(metadata, table_name):
+    """Проверяет существование таблицы в метаданных."""
     if table_name not in metadata:
         raise ValueError(
             f'Ошибка: Таблица "{table_name}" не существует.'
@@ -62,6 +58,7 @@ def check_table(metadata, table_name):
 
 
 def get_schema(metadata, table_name):
+    """Возвращает схему таблицы в виде словаря столбцов и типов."""
     check_table(metadata, table_name)
 
     return dict(
@@ -70,6 +67,7 @@ def get_schema(metadata, table_name):
 
 
 def validate_condition(metadata, table_name, condition):
+    """Проверяет существование столбца и тип значения в условии."""
     schema = get_schema(metadata, table_name)
 
     for column, value in condition.items():
@@ -88,6 +86,7 @@ def validate_condition(metadata, table_name, condition):
 
 
 def print_table(metadata, table_name, rows):
+    """Выводит записи таблицы в консоль с помощью PrettyTable."""
     columns = [
         column.split(":")[0]
         for column in metadata[table_name]
@@ -103,10 +102,11 @@ def print_table(metadata, table_name, rows):
 
 
 def run():
+    """Запускает основной цикл обработки пользовательских команд."""
     print_help()
 
     while True:
-        metadata = load_metadata(METADATA_FILE)
+        metadata = load_metadata(META_FILE)
 
         try:
             user_input = prompt.string(">>>Введите команду: ").strip()
@@ -149,7 +149,7 @@ def run():
                 result = create_table(metadata, table_name, columns)
 
                 if result is not None:
-                    save_metadata(METADATA_FILE, result)
+                    save_metadata(META_FILE, result)
 
             elif command == "list_tables":
                 if user_input.lower() != "list_tables":
@@ -176,7 +176,7 @@ def run():
                 result = drop_table(metadata, table_name)
 
                 if result is not None:
-                    save_metadata(METADATA_FILE, result)
+                    save_metadata(META_FILE, result)
                     delete_table_data(table_name)
 
             elif command == "insert":
